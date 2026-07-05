@@ -161,7 +161,6 @@
   <main class="app-shell">
     <header class="header">
       <h1>Mini Game Launcher</h1>
-      <p>管理画面: Ctrlを押してから5秒以内に g → m → a → p（各矢印間は1秒以内）</p>
     </header>
 
     <section id="player-view" class="panel">
@@ -187,16 +186,29 @@
 
     <section id="admin-view" class="panel hidden">
       <h2>管理画面</h2>
-      <p>Javaファイルと画像をセットで登録します。保存先はブラウザ内（localStorage）です。</p>
+      <p>GitHub の main ブランチにある MiniGame と MiniGameThumbnail から選択して登録します。</p>
 
       <form id="upload-form" class="upload-form">
         <label>
-          Javaファイル(.java)
-          <input id="java-file" type="file" accept=".java" required />
+          GitHub ユーザー/組織
+          <input id="repo-owner" type="text" placeholder="owner" required />
         </label>
         <label>
-          画像ファイル(.png/.jpg/.jpeg/.webp/.gif)
-          <input id="image-file" type="file" accept="image/*" required />
+          GitHub リポジトリ名
+          <input id="repo-name" type="text" placeholder="repository" required />
+        </label>
+        <button id="load-github" type="button">GitHub から一覧取得</button>
+        <label>
+          Javaファイル (main/MiniGame)
+          <select id="java-select" required>
+            <option value="">先に一覧取得してください</option>
+          </select>
+        </label>
+        <label>
+          画像ファイル (main/MiniGameThumbnail)
+          <select id="image-select" required>
+            <option value="">先に一覧取得してください</option>
+          </select>
         </label>
         <button type="submit">登録</button>
       </form>
@@ -218,8 +230,19 @@
       const dialogTitleEl = document.getElementById('dialog-title');
       const adminMessage = document.getElementById('admin-message');
       const uploadForm = document.getElementById('upload-form');
-      const javaFileInput = document.getElementById('java-file');
-      const imageFileInput = document.getElementById('image-file');
+      const repoOwnerInput = document.getElementById('repo-owner');
+      const repoNameInput = document.getElementById('repo-name');
+      const loadGithubBtn = document.getElementById('load-github');
+      const javaSelect = document.getElementById('java-select');
+      const imageSelect = document.getElementById('image-select');
+
+      const BRANCH = 'main';
+      const JAVA_DIR = 'MiniGame';
+      const THUMB_DIR = 'MiniGameThumbnail';
+      const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+
+      let githubJavaList = [];
+      let githubImageList = [];
 
       let games = [];
       let currentIndex = 0;
@@ -301,22 +324,77 @@
         return fileName.replace(/\.java$/i, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60) || 'Game';
       }
 
-      function fileToText(file) {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result));
-          reader.onerror = reject;
-          reader.readAsText(file, 'UTF-8');
-        });
+      function clearSelectOptions(selectEl, firstText) {
+        selectEl.innerHTML = '';
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = firstText;
+        selectEl.appendChild(opt);
       }
 
-      function fileToDataUrl(file) {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result));
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
+      function fillSelect(selectEl, items, emptyText) {
+        clearSelectOptions(selectEl, emptyText);
+        for (const item of items) {
+          const opt = document.createElement('option');
+          opt.value = item.path;
+          opt.textContent = item.name;
+          selectEl.appendChild(opt);
+        }
+      }
+
+      async function fetchGithubDir(owner, repo, dirPath) {
+        const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${dirPath}?ref=${encodeURIComponent(BRANCH)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`GitHub API error (${res.status})`);
+        }
+        const data = await res.json();
+        if (!Array.isArray(data)) {
+          throw new Error('GitHub レスポンスが不正です');
+        }
+        return data.filter(item => item && item.type === 'file');
+      }
+
+      async function loadGithubLists() {
+        const owner = repoOwnerInput.value.trim();
+        const repo = repoNameInput.value.trim();
+        if (!owner || !repo) {
+          adminMessage.textContent = 'GitHub ユーザー/組織 と リポジトリ名を入力してください。';
+          return;
+        }
+
+        adminMessage.textContent = 'GitHub から取得中...';
+        try {
+          const [javaFiles, imageFiles] = await Promise.all([
+            fetchGithubDir(owner, repo, JAVA_DIR),
+            fetchGithubDir(owner, repo, THUMB_DIR)
+          ]);
+
+          githubJavaList = javaFiles
+            .filter(f => String(f.name).toLowerCase().endsWith('.java'))
+            .map(f => ({ name: f.name, path: f.path, downloadUrl: f.download_url }));
+
+          githubImageList = imageFiles
+            .filter(f => {
+              const ext = String(f.name).split('.').pop()?.toLowerCase() || '';
+              return IMAGE_EXTS.has(ext);
+            })
+            .map(f => ({ name: f.name, path: f.path, downloadUrl: f.download_url }));
+
+          fillSelect(javaSelect, githubJavaList, 'Javaファイルを選択');
+          fillSelect(imageSelect, githubImageList, '画像ファイルを選択');
+
+          if (githubJavaList.length === 0 || githubImageList.length === 0) {
+            adminMessage.textContent = '対象ディレクトリに必要ファイルが見つかりませんでした。';
+            return;
+          }
+
+          adminMessage.textContent = '一覧を取得しました。';
+        } catch (err) {
+          clearSelectOptions(javaSelect, '取得に失敗しました');
+          clearSelectOptions(imageSelect, '取得に失敗しました');
+          adminMessage.textContent = '一覧取得に失敗しました: ' + (err?.message || err);
+        }
       }
 
       function resetAdminSequence() {
@@ -386,22 +464,34 @@
         advanceAdminSequence(e.key.toLowerCase());
       });
 
+      loadGithubBtn.addEventListener('click', loadGithubLists);
+
       uploadForm.addEventListener('submit', async e => {
         e.preventDefault();
         adminMessage.textContent = '';
 
-        const javaFile = javaFileInput.files?.[0];
-        const imageFile = imageFileInput.files?.[0];
-        if (!javaFile || !imageFile) {
-          adminMessage.textContent = 'Javaファイルと画像を選択してください。';
+        const owner = repoOwnerInput.value.trim();
+        const repo = repoNameInput.value.trim();
+        const javaPath = javaSelect.value;
+        const imagePath = imageSelect.value;
+        if (!owner || !repo || !javaPath || !imagePath) {
+          adminMessage.textContent = 'GitHub 情報とJava/画像ファイルを選択してください。';
           return;
         }
 
         try {
-          const [javaText, imageDataUrl] = await Promise.all([
-            fileToText(javaFile),
-            fileToDataUrl(imageFile)
-          ]);
+          const javaItem = githubJavaList.find(item => item.path === javaPath);
+          const imageItem = githubImageList.find(item => item.path === imagePath);
+          if (!javaItem || !imageItem || !javaItem.downloadUrl || !imageItem.downloadUrl) {
+            adminMessage.textContent = '選択したGitHubファイル情報が不正です。再取得してください。';
+            return;
+          }
+
+          const javaRes = await fetch(javaItem.downloadUrl);
+          if (!javaRes.ok) {
+            throw new Error('Javaファイルの取得に失敗しました');
+          }
+          const javaText = await javaRes.text();
 
           const localGames = (() => {
             const raw = localStorage.getItem('mini-games');
@@ -409,9 +499,9 @@
             try { return JSON.parse(raw); } catch { return []; }
           })();
 
-          const name = sanitizeName(javaFile.name);
+          const name = sanitizeName(javaItem.name);
           const idx = localGames.findIndex(g => g.name === name);
-          const next = { name, imageUrl: imageDataUrl, source: javaText };
+          const next = { name, imageUrl: imageItem.downloadUrl, source: javaText };
           if (idx >= 0) localGames[idx] = next;
           else localGames.push(next);
 

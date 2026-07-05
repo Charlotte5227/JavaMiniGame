@@ -186,18 +186,11 @@
 
     <section id="admin-view" class="panel hidden">
       <h2>管理画面</h2>
-      <p>GitHub の main ブランチにある MiniGame と MiniGameThumbnail から選択して登録します。</p>
+      <p>このページが置かれている GitHub リポジトリの main/MiniGame と main/MiniGameThumbnail から選択して登録します。</p>
 
       <form id="upload-form" class="upload-form">
-        <label>
-          GitHub ユーザー/組織
-          <input id="repo-owner" type="text" placeholder="owner" required />
-        </label>
-        <label>
-          GitHub リポジトリ名
-          <input id="repo-name" type="text" placeholder="repository" required />
-        </label>
-        <button id="load-github" type="button">GitHub から一覧取得</button>
+        <div id="repo-info" class="hint"></div>
+        <button id="load-github" type="button">一覧を更新</button>
         <label>
           Javaファイル (main/MiniGame)
           <select id="java-select" required>
@@ -229,9 +222,8 @@
       const sourceCodeEl = document.getElementById('source-code');
       const dialogTitleEl = document.getElementById('dialog-title');
       const adminMessage = document.getElementById('admin-message');
+      const repoInfoEl = document.getElementById('repo-info');
       const uploadForm = document.getElementById('upload-form');
-      const repoOwnerInput = document.getElementById('repo-owner');
-      const repoNameInput = document.getElementById('repo-name');
       const loadGithubBtn = document.getElementById('load-github');
       const javaSelect = document.getElementById('java-select');
       const imageSelect = document.getElementById('image-select');
@@ -243,6 +235,7 @@
 
       let githubJavaList = [];
       let githubImageList = [];
+      let resolvedRepo = null;
 
       let games = [];
       let currentIndex = 0;
@@ -342,6 +335,46 @@
         }
       }
 
+      function detectRepoFromLocation() {
+        const host = location.hostname.toLowerCase();
+        const pathParts = location.pathname.split('/').filter(Boolean);
+        const fileLike = (s) => /\.[a-z0-9]+$/i.test(s || '');
+
+        // Project Pages: https://owner.github.io/repo/
+        if (host.endsWith('.github.io') && pathParts.length >= 2) {
+          const owner = host.replace('.github.io', '');
+          const repo = pathParts[0];
+          return { owner, repo };
+        }
+
+        // User/Org Pages root: https://owner.github.io/ (repo is owner.github.io)
+        if (host.endsWith('.github.io') && pathParts.length === 0) {
+          const owner = host.replace('.github.io', '');
+          return { owner, repo: owner + '.github.io' };
+        }
+
+        // User/Org Pages file path: https://owner.github.io/xxx.html
+        if (host.endsWith('.github.io') && pathParts.length === 1 && fileLike(pathParts[0])) {
+          const owner = host.replace('.github.io', '');
+          return { owner, repo: owner + '.github.io' };
+        }
+
+        // Project Pages file path: https://owner.github.io/repo/xxx.html
+        if (host.endsWith('.github.io') && pathParts.length >= 1 && !fileLike(pathParts[0])) {
+          const owner = host.replace('.github.io', '');
+          const repo = pathParts[0];
+          return { owner, repo };
+        }
+
+        // github.com repository file preview URL fallback
+        // e.g. https://github.com/owner/repo/blob/main/MiniGameLauncher.html
+        if (host === 'github.com' && pathParts.length >= 2) {
+          return { owner: pathParts[0], repo: pathParts[1] };
+        }
+
+        return null;
+      }
+
       async function fetchGithubDir(owner, repo, dirPath) {
         const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${dirPath}?ref=${encodeURIComponent(BRANCH)}`;
         const res = await fetch(url);
@@ -356,12 +389,13 @@
       }
 
       async function loadGithubLists() {
-        const owner = repoOwnerInput.value.trim();
-        const repo = repoNameInput.value.trim();
-        if (!owner || !repo) {
-          adminMessage.textContent = 'GitHub ユーザー/組織 と リポジトリ名を入力してください。';
+        if (!resolvedRepo) {
+          adminMessage.textContent = 'リポジトリ情報を自動判定できませんでした。GitHub Pages (owner.github.io/repo) で開いてください。';
           return;
         }
+
+        const owner = resolvedRepo.owner;
+        const repo = resolvedRepo.repo;
 
         adminMessage.textContent = 'GitHub から取得中...';
         try {
@@ -470,12 +504,10 @@
         e.preventDefault();
         adminMessage.textContent = '';
 
-        const owner = repoOwnerInput.value.trim();
-        const repo = repoNameInput.value.trim();
         const javaPath = javaSelect.value;
         const imagePath = imageSelect.value;
-        if (!owner || !repo || !javaPath || !imagePath) {
-          adminMessage.textContent = 'GitHub 情報とJava/画像ファイルを選択してください。';
+        if (!resolvedRepo || !javaPath || !imagePath) {
+          adminMessage.textContent = 'Java/画像ファイルを選択してください。';
           return;
         }
 
@@ -513,6 +545,16 @@
           adminMessage.textContent = '登録に失敗しました: ' + (err?.message || err);
         }
       });
+
+      resolvedRepo = detectRepoFromLocation();
+      if (resolvedRepo) {
+        repoInfoEl.textContent = '対象リポジトリ: ' + resolvedRepo.owner + '/' + resolvedRepo.repo;
+        loadGithubLists();
+      } else {
+        repoInfoEl.textContent = '対象リポジトリを自動判定できませんでした。GitHub Pages上で開いてください。';
+        clearSelectOptions(javaSelect, '自動判定に失敗しました');
+        clearSelectOptions(imageSelect, '自動判定に失敗しました');
+      }
 
       loadGames();
     })();
